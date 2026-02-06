@@ -41,10 +41,10 @@ class AudioBuffer:
     """
     Circular buffer for audio chunks with overflow protection.
     
-    Max 10 seconds of audio at 16kHz mono (320KB).
+    Max 30 seconds of audio at 16kHz mono (960KB).
     """
 
-    def __init__(self, max_duration_seconds: int = 10, sample_rate: int = 16000):
+    def __init__(self, max_duration_seconds: int = 30, sample_rate: int = 16000):
         self.max_size = max_duration_seconds * sample_rate * 2  # 2 bytes per sample (16-bit)
         self.buffer: bytearray = bytearray()
         self.total_bytes_received = 0

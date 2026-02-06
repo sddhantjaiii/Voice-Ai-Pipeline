@@ -51,6 +51,8 @@ class DeepgramClient:
         self.is_connected = False
         self.is_closing = False
         self._receive_task: Optional[asyncio.Task] = None
+        self._send_task: Optional[asyncio.Task] = None
+        self._audio_queue: asyncio.Queue = asyncio.Queue(maxsize=100)
         self._reconnect_attempts = 0
         self._max_reconnect_attempts = 5
 
@@ -91,6 +93,8 @@ class DeepgramClient:
 
             # Start receiving messages
             self._receive_task = asyncio.create_task(self._receive_loop())
+            # Start audio send loop
+            self._send_task = asyncio.create_task(self._send_loop())
             return True
 
         except Exception as e:
@@ -123,26 +127,70 @@ class DeepgramClient:
             except asyncio.CancelledError:
                 pass
 
+        # Cancel send task
+        if self._send_task and not self._send_task.done():
+            self._send_task.cancel()
+            try:
+                await self._send_task
+            except asyncio.CancelledError:
+                pass
+
         logger.info("Disconnected from Deepgram")
 
     async def send_audio(self, audio_data: bytes):
         """
-        Send audio chunk to Deepgram for transcription.
+        Queue audio chunk for sending to Deepgram.
 
         Args:
             audio_data: Raw PCM audio bytes (16kHz mono)
         """
-        if not self.is_connected or not self.ws:
+        if not self.is_connected:
             logger.warning("Cannot send audio: not connected to Deepgram")
             return
 
         try:
-            await self.ws.send(audio_data)
-        except WebSocketException as e:
-            logger.error(f"Error sending audio to Deepgram: {e}")
-            self.is_connected = False
-            # Attempt reconnection
-            asyncio.create_task(self._reconnect())
+            # Non-blocking put with timeout
+            await asyncio.wait_for(self._audio_queue.put(audio_data), timeout=0.1)
+        except asyncio.TimeoutError:
+            logger.warning("Audio queue full - dropping chunk to prevent blocking")
+        except Exception as e:
+            logger.error(f"Error queuing audio: {e}")
+
+    async def _send_loop(self):
+        """
+        Continuously send audio from queue to Deepgram.
+        
+        This prevents overwhelming the WebSocket with rapid sends.
+        """
+        try:
+            while not self.is_closing:
+                try:
+                    # Get audio chunk from queue (blocks until available)
+                    audio_data = await asyncio.wait_for(
+                        self._audio_queue.get(),
+                        timeout=5.0
+                    )
+                    
+                    if self.ws and self.is_connected:
+                        await self.ws.send(audio_data)
+                        
+                except asyncio.TimeoutError:
+                    # No audio for 5 seconds - send keepalive
+                    if self.ws and self.is_connected:
+                        try:
+                            await self.ws.send(json.dumps({"type": "KeepAlive"}))
+                        except Exception:
+                            pass
+                except WebSocketException as e:
+                    logger.error(f"Error sending audio to Deepgram: {e}")
+                    self.is_connected = False
+                    asyncio.create_task(self._reconnect())
+                    break
+                except Exception as e:
+                    logger.error(f"Unexpected error in send loop: {e}")
+                    
+        except asyncio.CancelledError:
+            logger.debug("Send loop cancelled")
 
     async def _receive_loop(self):
         """
