@@ -37,6 +37,9 @@ class OpenAIClient:
         self.api_key = settings.openai_api_key
         self.model = settings.openai_model
         self.base_url = "https://api.openai.com/v1/chat/completions"
+        self.organization_id = settings.openai_organization_id
+        self.project_id = settings.openai_project_id
+        self.use_priority_api = settings.openai_use_priority_api
 
     async def generate_response(
         self,
@@ -67,6 +70,16 @@ class OpenAIClient:
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
+        
+        # Add priority API headers
+        if self.use_priority_api:
+            headers["x-stainless-priority"] = "high"
+        
+        # Add organization and project IDs if provided
+        if self.organization_id:
+            headers["OpenAI-Organization"] = self.organization_id
+        if self.project_id:
+            headers["OpenAI-Project"] = self.project_id
 
         full_response = ""
         prompt_tokens = 0
@@ -177,6 +190,16 @@ class OpenAIClient:
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
+        
+        # Add priority API headers
+        if self.use_priority_api:
+            headers["x-stainless-priority"] = "high"
+        
+        # Add organization and project IDs if provided
+        if self.organization_id:
+            headers["OpenAI-Organization"] = self.organization_id
+        if self.project_id:
+            headers["OpenAI-Project"] = self.project_id
 
         sentence_buffer = ""
         first_token_received = False

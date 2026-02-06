@@ -31,8 +31,20 @@ class Settings(BaseSettings):
         description="OpenAI API key for language model"
     )
     openai_model: str = Field(
-        default="gpt-3.5-turbo",
-        description="OpenAI model to use (gpt-3.5-turbo is faster, gpt-4 is more accurate)"
+        default="gpt-4o-mini",
+        description="OpenAI model to use (gpt-4o-mini for speed/cost, gpt-4o for accuracy)"
+    )
+    openai_organization_id: Optional[str] = Field(
+        default=None,
+        description="OpenAI organization ID for priority API access"
+    )
+    openai_project_id: Optional[str] = Field(
+        default=None,
+        description="OpenAI project ID for usage tracking"
+    )
+    openai_use_priority_api: bool = Field(
+        default=True,
+        description="Use OpenAI priority API tier for lower latency"
     )
     elevenlabs_api_key: str = Field(
         ...,
