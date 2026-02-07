@@ -151,7 +151,6 @@ export class AudioPlayer {
   
   // Simple implementation for iOS
   private audioQueue: HTMLAudioElement[] = [];
-  private currentAudioIndex = 0;
   private allChunks: string[] = [];
   
   private isPlaying = false;
@@ -232,7 +231,6 @@ export class AudioPlayer {
         audio.src = '';
       });
       this.audioQueue = [];
-      this.currentAudioIndex = 0;
       this.allChunks = [];
     }
   }
