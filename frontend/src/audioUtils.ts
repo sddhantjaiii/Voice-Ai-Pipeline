@@ -227,19 +227,22 @@ export class AudioPlayer {
     
     // Also unlock an HTMLAudioElement as fallback
     // (in case decodeAudioData fails with this MP3 format)
+    // Don't await this - let it happen in background to avoid blocking mic permission
     if (!this.iosUnlockedAudio) {
-      try {
-        const audio = new Audio();
-        audio.setAttribute('playsinline', '');
-        audio.setAttribute('webkit-playsinline', '');
-        // Shortest valid MP3 - plays ~0ms of silence
-        audio.src = 'data:audio/mpeg;base64,/+NIxAAAAAANIAAAAAExBTUUzLjEwMFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV';
-        await audio.play();
-        this.iosUnlockedAudio = audio;
-        console.log('🔓 iOS HTMLAudioElement unlocked (fallback)');
-      } catch (e) {
-        console.warn('⚠️ iOS HTMLAudioElement unlock failed:', e);
-      }
+      (async () => {
+        try {
+          const audio = new Audio();
+          audio.setAttribute('playsinline', '');
+          audio.setAttribute('webkit-playsinline', '');
+          // Shortest valid MP3 - plays ~0ms of silence
+          audio.src = 'data:audio/mpeg;base64,/+NIxAAAAAANIAAAAAExBTUUzLjEwMFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV';
+          await audio.play();
+          this.iosUnlockedAudio = audio;
+          console.log('🔓 iOS HTMLAudioElement unlocked (fallback)');
+        } catch (e) {
+          console.warn('⚠️ iOS HTMLAudioElement unlock failed:', e);
+        }
+      })();
     }
   }
 

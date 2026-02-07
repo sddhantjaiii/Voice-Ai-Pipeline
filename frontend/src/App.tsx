@@ -4,7 +4,7 @@ import { AudioRecorder, AudioPlayer, float32ToInt16Base64 } from './audioUtils';
 import DebugPanel from './DebugPanel';
 
 // Frontend version for deployment tracking
-const VERSION = 'v1.0.4-ios-complete-mp3';
+const VERSION = 'v1.0.5-debug-logs';
 
 function App() {
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('disconnected');
@@ -194,19 +194,32 @@ function App() {
   };
 
   const handleStartRecording = async () => {
+    console.log('🎤 handleStartRecording called');
+    console.log('🎤 connectionStatus:', connectionStatus);
+    console.log('🎤 wsRef.current:', wsRef.current ? 'exists' : 'null');
+    
     // Unlock audio on iOS first — MUST await so it happens within gesture context
-    await unlockAudio();
+    try {
+      await unlockAudio();
+      console.log('🎤 unlockAudio completed');
+    } catch (e) {
+      console.error('🎤 unlockAudio failed:', e);
+    }
     
     if (!wsRef.current || connectionStatus !== 'connected') {
-      setError('Not connected to server');
+      const msg = !wsRef.current ? 'WebSocket not initialized' : 'Not connected to server';
+      console.error('🎤 Cannot start recording:', msg);
+      setError(msg);
       return;
     }
 
     try {
+      console.log('🎤 Creating AudioRecorder...');
       const recorder = new AudioRecorder();
       recorderRef.current = recorder;
 
       let chunkCount = 0;
+      console.log('🎤 Starting recorder...');
       await recorder.start((audioData: Float32Array) => {
         // Convert to base64 PCM and send to backend
         const audioBase64 = float32ToInt16Base64(audioData);
@@ -228,10 +241,10 @@ function App() {
 
       setIsRecording(true);
       setError('');
-      console.log('Recording started');
+      console.log('🎤 Recording started successfully');
     } catch (err) {
-      console.error('Failed to start recording:', err);
-      setError('Microphone access denied');
+      console.error('🎤 Failed to start recording:', err);
+      setError(`Microphone access denied: ${(err as Error).message}`);
     }
   };
 
