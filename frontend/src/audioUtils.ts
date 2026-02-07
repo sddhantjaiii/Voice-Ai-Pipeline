@@ -273,7 +273,8 @@ export class AudioPlayer {
       }
     } else {
       // iOS fallback: collect chunks for batch playback
-      console.log(`\ud83c\udfa7 iOS: Chunk ${this.allChunks.length + 1} collected (${base64Audio.length} chars)`);\n      this.allChunks.push(base64Audio);
+      console.log(`🎧 iOS: Chunk ${this.allChunks.length + 1} collected (${base64Audio.length} chars)`);
+      this.allChunks.push(base64Audio);
     }
   }
 
