@@ -278,26 +278,55 @@ export class AudioPlayer {
         }
       }
     } else {
-      // iOS fallback: collect chunks for batch playback
-      console.log(`🎧 iOS: Chunk ${this.allChunks.length + 1} collected (${base64Audio.length} chars)`);
+      // iOS fallback: collect chunks
       this.allChunks.push(base64Audio);
       
-      // Auto-play safety: if finalize() isn't called within 3 seconds of first chunk, auto-play
-      if (this.allChunks.length === 1) {
-        console.log('🎧 iOS: Starting 3s auto-play timer');
-        this.iosAutoPlayTimer = setTimeout(() => {
-          if (this.allChunks.length > 0 && !this.isFinalized) {
-            console.log('🎧 iOS: Auto-play timer triggered - finalize was not called!');
-            this.finalize();
-          }
-        }, 3000);
+      // Start playback early after buffering ~1 second of audio (first 3 chunks)
+      // This is a compromise - not true streaming but faster than waiting for all
+      const EARLY_PLAY_CHUNKS = 3;
+      if (this.allChunks.length === EARLY_PLAY_CHUNKS && !this.isPlaying) {
+        console.log(`🎧 iOS: Early play after ${EARLY_PLAY_CHUNKS} chunks`);
+        // Mark playing to prevent finalize from playing again
+        this.isPlaying = true;
+        // Schedule playback with chunks collected so far
+        this.scheduleIOSPlayback();
       }
     }
   }
 
+  private iosPlaybackScheduled = false;
+  private iosCurrentAudio: HTMLAudioElement | null = null;
+  
+  private scheduleIOSPlayback(): void {
+    if (this.iosPlaybackScheduled) return;
+    this.iosPlaybackScheduled = true;
+    
+    // Play what we have now, and when it ends, play any new chunks
+    this.playNextIOSBatch();
+  }
+  
+  private async playNextIOSBatch(): Promise<void> {
+    if (this.allChunks.length === 0) {
+      console.log('🎧 iOS: No more chunks to play');
+      this.isPlaying = false;
+      this.iosPlaybackScheduled = false;
+      if (this.onComplete) {
+        this.onComplete();
+      }
+      return;
+    }
+    
+    // Take all current chunks and play them
+    const chunksToPlay = [...this.allChunks];
+    this.allChunks = []; // Clear so new chunks go to next batch
+    
+    console.log(`🎧 iOS: Playing batch of ${chunksToPlay.length} chunks`);
+    await this.playIOSChunks(chunksToPlay);
+  }
+
   finalize(): void {
     this.isFinalized = true;
-    console.log(`🎧 FINALIZE: useMediaSource=${this.useMediaSource}, chunks=${this.allChunks.length}, queue=${this.queue.length}`);
+    console.log(`🎧 FINALIZE: useMediaSource=${this.useMediaSource}, chunks=${this.allChunks.length}, isPlaying=${this.isPlaying}`);
     
     // Clear auto-play timer if it was set
     if (this.iosAutoPlayTimer) {
@@ -308,27 +337,42 @@ export class AudioPlayer {
     if (this.useMediaSource) {
       this.flushQueue();
     } else {
-      // iOS: Concatenate all chunks and play as single audio
-      console.log('🎧 iOS: Starting playIOSAudio()');
-      this.playIOSAudio();
+      // iOS: If not already playing (short responses < 3 chunks), start now
+      if (!this.isPlaying && this.allChunks.length > 0) {
+        console.log('🎧 iOS: Starting playback on finalize (short response)');
+        this.isPlaying = true;
+        this.scheduleIOSPlayback();
+      }
+      // If already playing, playNextIOSBatch will handle remaining chunks
     }
   }
-
-  private async playIOSAudio(): Promise<void> {
-    if (this.allChunks.length === 0) {
-      console.log('iOS Audio: No chunks to play');
+  
+  private async playIOSChunks(chunks: string[]): Promise<void> {
+    if (chunks.length === 0) {
+      // Check if more chunks arrived while we were playing
+      if (this.allChunks.length > 0) {
+        this.playNextIOSBatch();
+      } else if (!this.isFinalized) {
+        // Wait a bit for more chunks
+        setTimeout(() => this.playNextIOSBatch(), 300);
+      } else {
+        // All done
+        console.log('🎧 iOS: All playback complete');
+        this.isPlaying = false;
+        this.iosPlaybackScheduled = false;
+        if (this.onComplete) {
+          this.onComplete();
+        }
+      }
       return;
     }
 
-    console.log(`iOS Audio: Playing ${this.allChunks.length} chunks`);
-
     try {
-      // CRITICAL: Decode each base64 chunk separately, then concatenate binary data
-      // (You cannot concatenate base64 strings directly!)
+      // Decode chunks and combine
       const decodedChunks: Uint8Array[] = [];
       let totalLength = 0;
       
-      for (const base64Chunk of this.allChunks) {
+      for (const base64Chunk of chunks) {
         const binaryString = atob(base64Chunk);
         const bytes = new Uint8Array(binaryString.length);
         for (let i = 0; i < binaryString.length; i++) {
@@ -338,7 +382,6 @@ export class AudioPlayer {
         totalLength += bytes.length;
       }
       
-      // Combine all decoded chunks into single Uint8Array
       const combinedBytes = new Uint8Array(totalLength);
       let offset = 0;
       for (const chunk of decodedChunks) {
@@ -346,77 +389,40 @@ export class AudioPlayer {
         offset += chunk.length;
       }
       
-      console.log(`iOS Audio: Decoded ${decodedChunks.length} chunks, total ${totalLength} bytes`);
+      console.log(`🎧 iOS: Playing ${chunks.length} chunks, ${totalLength} bytes`);
       
       const blob = new Blob([combinedBytes], { type: 'audio/mpeg' });
       const url = URL.createObjectURL(blob);
-      console.log(`iOS Audio: Blob created, size: ${blob.size} bytes`);
       
-      // Create audio element with iOS-friendly attributes
       const audio = new Audio();
       audio.preload = 'auto';
-      // Note: playsinline attribute is for video, but we set it anyway for compatibility
       audio.setAttribute('playsinline', '');
       audio.setAttribute('webkit-playsinline', '');
       audio.src = url;
-      
-      audio.addEventListener('loadedmetadata', () => {
-        console.log(`iOS Audio: Loaded, duration: ${audio.duration}s`);
-      });
-      
-      audio.addEventListener('canplay', () => {
-        console.log('iOS Audio: Can play');
-      });
-      
-      audio.addEventListener('playing', () => {
-        console.log('iOS Audio: Playing started');
-        this.isPlaying = true;
-      });
+      this.iosCurrentAudio = audio;
       
       audio.addEventListener('ended', () => {
-        console.log('iOS Audio: Playback ended');
+        console.log('🎧 iOS: Batch ended');
         URL.revokeObjectURL(url);
-        this.isPlaying = false;
-        if (this.onComplete) {
-          this.onComplete();
-        }
+        this.iosCurrentAudio = null;
+        // Play next batch if available
+        this.playNextIOSBatch();
       });
       
       audio.addEventListener('error', () => {
-        const mediaError = audio.error;
-        let errorMsg = 'Unknown error';
-        if (mediaError) {
-          switch (mediaError.code) {
-            case MediaError.MEDIA_ERR_ABORTED:
-              errorMsg = 'Playback aborted';
-              break;
-            case MediaError.MEDIA_ERR_NETWORK:
-              errorMsg = 'Network error';
-              break;
-            case MediaError.MEDIA_ERR_DECODE:
-              errorMsg = 'Decode error - invalid audio format';
-              break;
-            case MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED:
-              errorMsg = 'Audio format not supported';
-              break;
-          }
-        }
-        console.error('iOS audio playback error:', errorMsg, mediaError);
+        console.error('🎧 iOS: Audio error', audio.error);
         URL.revokeObjectURL(url);
-        this.isPlaying = false;
+        this.iosCurrentAudio = null;
+        // Try to continue with next batch
+        this.playNextIOSBatch();
       });
       
-      // Try to play
-      console.log('iOS Audio: Attempting to play...');
       await audio.play();
       this.audioQueue.push(audio);
     } catch (e: any) {
-      console.error('Failed to play iOS audio:', e.name, e.message);
-      
-      // If autoplay was blocked, notify user
-      if (e.name === 'NotAllowedError') {
-        console.warn('iOS Audio: Autoplay blocked. User interaction required first.');
-      }
+      console.error('🎧 iOS: Failed to play batch:', e.message);
+      // Try next batch
+      this.playNextIOSBatch();
     }
   }
 
@@ -443,6 +449,10 @@ export class AudioPlayer {
       this.resetStream();
     } else {
       // iOS: stop all audio elements
+      if (this.iosCurrentAudio) {
+        this.iosCurrentAudio.pause();
+        this.iosCurrentAudio = null;
+      }
       this.audioQueue.forEach(audio => {
         audio.pause();
         audio.currentTime = 0;
@@ -450,6 +460,7 @@ export class AudioPlayer {
       this.audioQueue = [];
       this.allChunks = [];
       this.isPlaying = false;
+      this.iosPlaybackScheduled = false;
     }
   }
 
