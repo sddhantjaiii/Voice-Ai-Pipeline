@@ -853,6 +853,9 @@ class TurnController:
             except asyncio.QueueEmpty:
                 break
         
+        # Force Deepgram to finalize any pending transcripts
+        await self.deepgram.finish_utterance()
+        
         # Cancel playback wait if active
         self._waiting_for_playback = False
         if self._playback_timeout_task and not self._playback_timeout_task.done():

@@ -156,6 +156,21 @@ class DeepgramClient:
         except Exception as e:
             logger.error(f"Error queuing audio: {e}")
 
+    async def finish_utterance(self):
+        """
+        Send FinishUtterance control message to force Deepgram to finalize any pending transcripts.
+        
+        Use this after interruptions or when resetting to ensure clean transcript boundaries.
+        """
+        if not self.is_connected or not self.ws:
+            return
+            
+        try:
+            await self.ws.send(json.dumps({"type": "FinishUtterance"}))
+            logger.info("Sent FinishUtterance to Deepgram")
+        except Exception as e:
+            logger.error(f"Error sending FinishUtterance: {e}")
+
     async def _send_loop(self):
         """
         Continuously send audio from queue to Deepgram.
