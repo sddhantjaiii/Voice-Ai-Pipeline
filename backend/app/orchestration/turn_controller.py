@@ -224,7 +224,7 @@ class TurnController:
             await self._transition_to_listening()
         
         # If we're in COMMITTED state and get a NEW partial transcript,
-        # user is speaking again → cancel TTS task and transition back to LISTENING
+        # user is speaking again → cancel TTS task and reset to IDLE
         elif current_state == TurnState.COMMITTED:
             logger.info(f"User interrupted during COMMITTED: '{text}' - cancelling TTS task")
             # Cancel TTS task if running
@@ -241,12 +241,19 @@ class TurnController:
                     self._sentence_queue.get_nowait()
                 except asyncio.QueueEmpty:
                     break
-            # Transition back to LISTENING
+            
+            # Transition to IDLE (valid transition), then next audio will go IDLE → LISTENING
             await self.state_machine.transition(
-                TurnState.LISTENING,
-                reason="User interrupted during COMMITTED"
+                TurnState.IDLE,
+                reason="User interrupted during COMMITTED - resetting"
             )
-            await self._notify_state_change(TurnState.COMMITTED, TurnState.LISTENING)
+            await self._notify_state_change(TurnState.COMMITTED, TurnState.IDLE)
+            
+            # Unlock transcript buffer so new speech can be captured
+            self.transcript_buffer.unlock()
+            
+            # Start new turn immediately since user is speaking
+            await self._transition_to_listening()
         
         # If we're in SPEAKING state and get a NEW partial transcript,
         # it means user is interrupting (barge-in)
