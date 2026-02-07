@@ -15,6 +15,7 @@ function App() {
   const [logs, setLogs] = useState<{timestamp: Date, type: 'partial' | 'final' | 'agent' | 'state', content: string}[]>([]);
   const [silenceDebounceMs, setSilenceDebounceMs] = useState(400);
   const [showSettings, setShowSettings] = useState(false);
+  const [audioUnlocked, setAudioUnlocked] = useState(false);
 
   // Refs for audio and WebSocket
   const wsRef = useRef<WebSocket | null>(null);
@@ -23,6 +24,21 @@ function App() {
 
   // WebSocket URL from environment
   const wsUrl = import.meta.env.VITE_WEBSOCKET_URL || 'ws://localhost:8000/ws/voice';
+
+  // Unlock audio on iOS with user interaction
+  const unlockAudio = () => {
+    if (audioUnlocked) return;
+    
+    const audio = new Audio();
+    audio.src = 'data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA//tQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWGluZwAAAA8AAAACAAADhAC7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7//////////////////////////////////////////////////////////////////8AAAAATGF2YzU4LjEzAAAAAAAAAAAAAAAAJAAAAAAAAAAAA4T+FcnLAAAAAAAAAAAAAAAA//sQZAAP8AAAaQAAAAgAAA0gAAABAAABpAAAACAAADSAAAAETEFNRTMuMTAwVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV';
+    audio.play().then(() => {
+      console.log('iOS Audio unlocked');
+      setAudioUnlocked(true);
+      audio.pause();
+    }).catch((e) => {
+      console.warn('Audio unlock failed:', e);
+    });
+  };
 
   // Initialize audio player
   useEffect(() => {
@@ -57,6 +73,9 @@ function App() {
   };
 
   const handleConnect = () => {
+    // Unlock audio on iOS first
+    unlockAudio();
+    
     setConnectionStatus('connecting');
     setError('');
     
@@ -162,6 +181,9 @@ function App() {
   };
 
   const handleStartRecording = async () => {
+    // Unlock audio on iOS first
+    unlockAudio();
+    
     if (!wsRef.current || connectionStatus !== 'connected') {
       setError('Not connected to server');
       return;
@@ -291,6 +313,21 @@ function App() {
         <h2 style={{ fontSize: '1.25rem', fontWeight: '600', marginBottom: '1rem' }}>
           Connection
         </h2>
+        
+        {/* iOS Audio Warning */}
+        {!audioUnlocked && /iPad|iPhone|iPod/.test(navigator.userAgent) && (
+          <div style={{
+            backgroundColor: '#fef3c7',
+            border: '1px solid #fbbf24',
+            borderRadius: '6px',
+            padding: '0.75rem',
+            marginBottom: '1rem',
+            fontSize: '0.875rem',
+            color: '#92400e',
+          }}>
+            🔊 <strong>iOS detected:</strong> Tap "Connect" or "Start Speaking" to enable audio playback.
+          </div>
+        )}
         
         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1rem' }}>
           <div style={{

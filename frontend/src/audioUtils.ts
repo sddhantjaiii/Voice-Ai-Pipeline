@@ -280,11 +280,17 @@ export class AudioPlayer {
   }
 
   private async playIOSAudio(): Promise<void> {
-    if (this.allChunks.length === 0) return;
+    if (this.allChunks.length === 0) {
+      console.log('iOS Audio: No chunks to play');
+      return;
+    }
+
+    console.log(`iOS Audio: Playing ${this.allChunks.length} chunks`);
 
     try {
       // Concatenate all base64 chunks
       const combinedBase64 = this.allChunks.join('');
+      console.log(`iOS Audio: Combined base64 length: ${combinedBase64.length}`);
       
       // Create blob from base64
       const binaryString = atob(combinedBase64);
@@ -295,9 +301,27 @@ export class AudioPlayer {
       
       const blob = new Blob([bytes], { type: 'audio/mpeg' });
       const url = URL.createObjectURL(blob);
+      console.log(`iOS Audio: Blob created, size: ${blob.size} bytes`);
       
-      const audio = new Audio(url);
+      const audio = new Audio();
+      audio.preload = 'auto';
+      audio.src = url;
+      
+      audio.addEventListener('loadedmetadata', () => {
+        console.log(`iOS Audio: Loaded, duration: ${audio.duration}s`);
+      });
+      
+      audio.addEventListener('canplay', () => {
+        console.log('iOS Audio: Can play');
+      });
+      
+      audio.addEventListener('playing', () => {
+        console.log('iOS Audio: Playing started');
+        this.isPlaying = true;
+      });
+      
       audio.addEventListener('ended', () => {
+        console.log('iOS Audio: Playback ended');
         URL.revokeObjectURL(url);
         this.isPlaying = false;
         if (this.onComplete) {
@@ -306,16 +330,40 @@ export class AudioPlayer {
       });
       
       audio.addEventListener('error', (e) => {
-        console.error('iOS audio playback error:', e);
+        const mediaError = audio.error;
+        let errorMsg = 'Unknown error';
+        if (mediaError) {
+          switch (mediaError.code) {
+            case MediaError.MEDIA_ERR_ABORTED:
+              errorMsg = 'Playback aborted';
+              break;
+            case MediaError.MEDIA_ERR_NETWORK:
+              errorMsg = 'Network error';
+              break;
+            case MediaError.MEDIA_ERR_DECODE:
+              errorMsg = 'Decode error - invalid audio format';
+              break;
+            case MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED:
+              errorMsg = 'Audio format not supported';
+              break;
+          }
+        }
+        console.error('iOS audio playback error:', errorMsg, mediaError);
         URL.revokeObjectURL(url);
         this.isPlaying = false;
       });
       
+      // Try to play
+      console.log('iOS Audio: Attempting to play...');
       await audio.play();
-      this.isPlaying = true;
       this.audioQueue.push(audio);
-    } catch (e) {
-      console.error('Failed to play iOS audio:', e);
+    } catch (e: any) {
+      console.error('Failed to play iOS audio:', e.name, e.message);
+      
+      // If autoplay was blocked, notify user
+      if (e.name === 'NotAllowedError') {
+        console.warn('iOS Audio: Autoplay blocked. User interaction required first.');
+      }
     }
   }
 
