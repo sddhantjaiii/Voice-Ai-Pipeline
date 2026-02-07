@@ -305,6 +305,17 @@ async def voice_websocket(websocket: WebSocket) -> None:
                     adaptive_debounce_enabled=message_data.get("adaptive_debounce_enabled"),
                 )
             
+            elif message_type == "text_input":
+                # Handle text input (for testing without microphone)
+                text = message_data.get("text", "")
+                if text:
+                    logger.info(f"Session {session_id} text input: {text}")
+                    await turn_controller.handle_final_transcript(text, confidence=1.0)
+            
+            elif message_type == "connect":
+                # Client sent connect message - already handled during connection
+                pass
+            
             else:
                 logger.warning(f"Session {session_id} sent unknown message type: {message_type}")
     

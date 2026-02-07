@@ -229,24 +229,25 @@ function App() {
   const handleTextSubmit = () => {
     if (!testInput.trim() || !wsRef.current) return;
     
-    // Simulate a final transcript
-    setFinalTranscript(testInput);
-    setLogs(prev => [...prev, {timestamp: new Date(), type: 'final', content: `[TEST MODE] ${testInput}`}]);
+    const text = testInput.trim();
     
-    // Send as if it were a real transcript - backend will process it
-    // We'll send it directly to trigger the LLM
-    console.log('Test mode: Sending text input:', testInput);
+    // Display in UI
+    setFinalTranscript(text);
+    setPartialTranscript('');
+    setLogs(prev => [...prev, {timestamp: new Date(), type: 'final', content: `[TEXT MODE] ${text}`}]);
     
-    // Set state to show we're processing
-    setCurrentState('COMMITTED');
+    // Send to backend as text_input message type
+    wsRef.current.send(JSON.stringify({
+      type: 'text_input',
+      data: {
+        text: text,
+      },
+    }));
+    
+    console.log('Text mode: Sent to backend:', text);
     
     // Clear input
-    const text = testInput;
     setTestInput('');
-    
-    // Simulate the flow by sending directly - we need to manually trigger since no audio
-    // For now, just set the transcript and let user know
-    setAgentResponse('Test mode: Backend integration needed. In production, this would trigger LLM with: "' + text + '"');
   };
 
   const handleInterrupt = () => {
