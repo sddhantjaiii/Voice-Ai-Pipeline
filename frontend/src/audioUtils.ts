@@ -273,17 +273,20 @@ export class AudioPlayer {
       }
     } else {
       // iOS fallback: collect chunks for batch playback
+      console.log(`iOS Audio: Collecting chunk ${this.allChunks.length + 1}, length=${base64Audio.length}`);
       this.allChunks.push(base64Audio);
     }
   }
 
   finalize(): void {
     this.isFinalized = true;
+    console.log(`AudioPlayer.finalize() called, useMediaSource=${this.useMediaSource}, chunks=${this.allChunks.length}`);
     
     if (this.useMediaSource) {
       this.flushQueue();
     } else {
       // iOS: Concatenate all chunks and play as single audio
+      console.log('iOS Audio: Triggering playIOSAudio()');
       this.playIOSAudio();
     }
   }

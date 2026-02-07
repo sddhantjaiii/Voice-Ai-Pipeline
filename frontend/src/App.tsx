@@ -121,7 +121,7 @@ function App() {
 
     ws.onmessage = (event) => {
       const message: ServerMessage = JSON.parse(event.data);
-      console.log('Received:', message.type);
+      console.log('Received message type:', message.type, 'data keys:', Object.keys(message.data || {}));
 
       switch (message.type) {
         case 'session_ready':
@@ -162,14 +162,18 @@ function App() {
           break;
         
         case 'agent_audio_chunk':
+          console.log(`Received audio chunk: index=${message.data.chunk_index}, is_final=${message.data.is_final}, has_audio=${!!message.data.audio}, audio_length=${message.data.audio?.length || 0}`);
           if (message.data.chunk_index === 0) {
             // New response: clear any previous audio buffer
+            console.log('Resetting audio stream for new response');
             playerRef.current?.resetStream();
           }
           if (message.data.audio && !message.data.is_final) {
+            console.log(`Adding audio chunk ${message.data.chunk_index} to player`);
             playerRef.current?.addChunk(message.data.audio);
           }
           if (message.data.is_final) {
+            console.log('Finalizing audio stream - triggering playback');
             playerRef.current?.finalize();
           }
           break;
