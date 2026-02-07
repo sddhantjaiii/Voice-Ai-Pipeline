@@ -16,6 +16,8 @@ function App() {
   const [silenceDebounceMs, setSilenceDebounceMs] = useState(400);
   const [showSettings, setShowSettings] = useState(false);
   const [audioUnlocked, setAudioUnlocked] = useState(false);
+  const [testMode, setTestMode] = useState(false);
+  const [testInput, setTestInput] = useState('');
 
   // Refs for audio and WebSocket
   const wsRef = useRef<WebSocket | null>(null);
@@ -224,6 +226,29 @@ function App() {
     console.log('Recording stopped');
   };
 
+  const handleTextSubmit = () => {
+    if (!testInput.trim() || !wsRef.current) return;
+    
+    // Simulate a final transcript
+    setFinalTranscript(testInput);
+    setLogs(prev => [...prev, {timestamp: new Date(), type: 'final', content: `[TEST MODE] ${testInput}`}]);
+    
+    // Send as if it were a real transcript - backend will process it
+    // We'll send it directly to trigger the LLM
+    console.log('Test mode: Sending text input:', testInput);
+    
+    // Set state to show we're processing
+    setCurrentState('COMMITTED');
+    
+    // Clear input
+    const text = testInput;
+    setTestInput('');
+    
+    // Simulate the flow by sending directly - we need to manually trigger since no audio
+    // For now, just set the transcript and let user know
+    setAgentResponse('Test mode: Backend integration needed. In production, this would trigger LLM with: "' + text + '"');
+  };
+
   const handleInterrupt = () => {
     // Stop agent audio
     playerRef.current?.stop();
@@ -404,11 +429,79 @@ function App() {
           padding: '1.5rem',
           marginBottom: '2rem',
         }}>
-          <h2 style={{ fontSize: '1.25rem', fontWeight: '600', marginBottom: '1rem' }}>
-            Voice Controls
-          </h2>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+            <h2 style={{ fontSize: '1.25rem', fontWeight: '600', margin: 0 }}>
+              {testMode ? 'Text Mode (Testing)' : 'Voice Controls'}
+            </h2>
+            <button
+              onClick={() => setTestMode(!testMode)}
+              style={{
+                padding: '0.25rem 0.75rem',
+                fontSize: '0.75rem',
+                backgroundColor: testMode ? '#8b5cf6' : '#6b7280',
+                color: 'white',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer',
+              }}
+            >
+              {testMode ? '🎤 Switch to Voice' : '⌨️ Switch to Text'}
+            </button>
+          </div>
 
-          <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
+          {testMode ? (
+            // Text input mode for testing
+            <div>
+              <div style={{
+                backgroundColor: '#fef3c7',
+                border: '1px solid #fbbf24',
+                borderRadius: '6px',
+                padding: '0.75rem',
+                marginBottom: '1rem',
+                fontSize: '0.875rem',
+                color: '#92400e',
+              }}>
+                💡 <strong>Test Mode:</strong> Type your message to test without microphone (useful for BrowserStack testing)
+              </div>
+              
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <input
+                  type="text"
+                  value={testInput}
+                  onChange={(e) => setTestInput(e.target.value)}
+                  onKeyPress={(e) => e.key === 'Enter' && handleTextSubmit()}
+                  placeholder="Type your message here..."
+                  style={{
+                    flex: 1,
+                    padding: '0.75rem',
+                    fontSize: '1rem',
+                    border: '2px solid #3b82f6',
+                    borderRadius: '6px',
+                    outline: 'none',
+                  }}
+                />
+                <button
+                  onClick={handleTextSubmit}
+                  disabled={!testInput.trim()}
+                  style={{
+                    backgroundColor: testInput.trim() ? '#3b82f6' : '#d1d5db',
+                    color: 'white',
+                    padding: '0.75rem 1.5rem',
+                    borderRadius: '6px',
+                    border: 'none',
+                    fontSize: '1rem',
+                    fontWeight: '600',
+                    cursor: testInput.trim() ? 'pointer' : 'not-allowed',
+                  }}
+                >
+                  Send
+                </button>
+              </div>
+            </div>
+          ) : (
+            // Original voice controls
+            <div>
+              <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
             {!isRecording ? (
               <button
                 onClick={handleStartRecording}
@@ -486,6 +579,8 @@ function App() {
                 animation: 'pulse 1.5s ease-in-out infinite',
               }} />
               Recording... Speak now
+            </div>
+          )}
             </div>
           )}
         </div>

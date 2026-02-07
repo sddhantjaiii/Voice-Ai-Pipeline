@@ -329,7 +329,7 @@ export class AudioPlayer {
         }
       });
       
-      audio.addEventListener('error', (e) => {
+      audio.addEventListener('error', () => {
         const mediaError = audio.error;
         let errorMsg = 'Unknown error';
         if (mediaError) {
