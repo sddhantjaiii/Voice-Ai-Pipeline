@@ -121,7 +121,7 @@ function App() {
 
     ws.onmessage = (event) => {
       const message: ServerMessage = JSON.parse(event.data);
-      console.log('Received message type:', message.type, 'data keys:', Object.keys(message.data || {}));
+      console.log('>>> RECV:', message.type, JSON.stringify(message.data).substring(0, 100));
 
       switch (message.type) {
         case 'session_ready':
@@ -162,18 +162,16 @@ function App() {
           break;
         
         case 'agent_audio_chunk':
-          console.log(`Received audio chunk: index=${message.data.chunk_index}, is_final=${message.data.is_final}, has_audio=${!!message.data.audio}, audio_length=${message.data.audio?.length || 0}`);
+          console.log(`🔊 AUDIO CHUNK #${message.data.chunk_index} final=${message.data.is_final} len=${message.data.audio?.length || 0}`);
           if (message.data.chunk_index === 0) {
-            // New response: clear any previous audio buffer
-            console.log('Resetting audio stream for new response');
+            console.log('🔊 Resetting audio stream');
             playerRef.current?.resetStream();
           }
           if (message.data.audio && !message.data.is_final) {
-            console.log(`Adding audio chunk ${message.data.chunk_index} to player`);
             playerRef.current?.addChunk(message.data.audio);
           }
           if (message.data.is_final) {
-            console.log('Finalizing audio stream - triggering playback');
+            console.log('🔊 FINALIZE - starting playback');
             playerRef.current?.finalize();
           }
           break;
@@ -223,10 +221,15 @@ function App() {
       const recorder = new AudioRecorder();
       recorderRef.current = recorder;
 
+      let chunkCount = 0;
       await recorder.start((audioData: Float32Array) => {
         // Convert to base64 PCM and send to backend
         const audioBase64 = float32ToInt16Base64(audioData);
-        console.log(`[${currentState}] Sending audio chunk: ${audioBase64.length} chars, ${audioData.length} samples`);
+        chunkCount++;
+        // Only log every 20th chunk to reduce noise
+        if (chunkCount % 20 === 1) {
+          console.log(`[MIC] Chunk #${chunkCount} sent`);
+        }
         
         wsRef.current?.send(JSON.stringify({
           type: 'audio_chunk',
