@@ -147,7 +147,7 @@ function isMediaSourceSupported(): boolean {
 /**
  * Audio player with queue for streaming playback.
  * Handles base64-encoded audio chunks from backend.
- * Uses MediaSource API on supported browsers, falls back to simple audio elements on iOS.
+ * Uses MediaSource API on supported browsers, falls back to Web Audio API on iOS.
  */
 export class AudioPlayer {
   private useMediaSource: boolean;
@@ -158,11 +158,14 @@ export class AudioPlayer {
   private sourceBuffer: SourceBuffer | null = null;
   private queue: Uint8Array[] = [];
   
-  // Simple implementation for iOS
-  private audioQueue: HTMLAudioElement[] = [];
+  // Web Audio API implementation for iOS
+  // Once AudioContext is resumed from a user gesture, it stays unlocked forever.
+  // Unlike HTMLAudioElement.play(), AudioBufferSourceNode.start() does NOT require
+  // a new user gesture each time — this is the key insight for reliable iOS audio.
+  private iosAudioContext: AudioContext | null = null;
+  private iosGainNode: GainNode | null = null;
+  private iosCurrentSource: AudioBufferSourceNode | null = null;
   private allChunks: string[] = [];
-  private iosAutoPlayTimer: ReturnType<typeof setTimeout> | null = null;
-  private iosUnlockedAudio: HTMLAudioElement | null = null; // Reusable audio element from user gesture
   
   private isPlaying = false;
   private onComplete: (() => void) | null = null;
@@ -170,7 +173,7 @@ export class AudioPlayer {
 
   constructor() {
     this.useMediaSource = isMediaSourceSupported();
-    console.log(`AudioPlayer: Using ${this.useMediaSource ? 'MediaSource API' : 'iOS fallback'}`);
+    console.log(`AudioPlayer: Using ${this.useMediaSource ? 'MediaSource API' : 'iOS Web Audio API'}`);
     
     if (this.useMediaSource) {
       this.initMediaSource();
@@ -178,33 +181,41 @@ export class AudioPlayer {
   }
 
   /**
-   * Unlock iOS audio by creating an audio element during user gesture.
-   * This element can be reused for all subsequent playback.
+   * Unlock iOS audio by creating and resuming an AudioContext during user gesture.
+   * This is the ONLY reliable way to enable programmatic audio on iOS Safari.
+   * Once resumed, the AudioContext stays unlocked for the lifetime of the page.
    */
   async unlockIOSAudio(): Promise<void> {
-    if (this.useMediaSource || this.iosUnlockedAudio) return;
+    if (this.useMediaSource) return;
+    if (this.iosAudioContext && this.iosAudioContext.state === 'running') {
+      console.log('🔓 iOS AudioContext already unlocked');
+      return;
+    }
     
     try {
-      const audio = new Audio();
-      audio.setAttribute('playsinline', '');
-      audio.setAttribute('webkit-playsinline', '');
-      audio.preload = 'auto';
-      // Use a very short silent MP3 (100ms of silence)
-      audio.src = 'data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA//tQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWGluZwAAAA8AAAACAAADhAC7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7//////////////////////////////////////////////////////////////////8AAAAATGF2YzU4LjEzAAAAAAAAAAAAAAAAJAAAAAAAAAAAA4T+FcnLAAAAAAAAAAAAAAAA//sQZAAP8AAAaQAAAAgAAA0gAAABAAABpAAAACAAADSAAAAETEFNRTMuMTAwVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV';
+      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+      this.iosAudioContext = new AudioContextClass();
       
-      // Play and let it complete naturally (don't pause immediately)
-      await audio.play();
-      console.log('🔓 iOS audio element unlocked');
+      // Resume must happen during user gesture
+      if (this.iosAudioContext.state === 'suspended') {
+        await this.iosAudioContext.resume();
+      }
       
-      // Store this audio element for reuse
-      this.iosUnlockedAudio = audio;
+      // Create a gain node for volume control / muting on stop
+      this.iosGainNode = this.iosAudioContext.createGain();
+      this.iosGainNode.gain.value = 1.0;
+      this.iosGainNode.connect(this.iosAudioContext.destination);
       
-      // Set up ended handler for reuse
-      audio.addEventListener('ended', () => {
-        console.log('🔄 Unlocked audio ended, ready for reuse');
-      });
+      // Play a tiny silent buffer to fully activate the audio path
+      const silentBuffer = this.iosAudioContext.createBuffer(1, 1, 22050);
+      const silentSource = this.iosAudioContext.createBufferSource();
+      silentSource.buffer = silentBuffer;
+      silentSource.connect(this.iosAudioContext.destination);
+      silentSource.start(0);
+      
+      console.log(`🔓 iOS AudioContext unlocked: state=${this.iosAudioContext.state}`);
     } catch (e) {
-      console.warn('⚠️ iOS audio unlock failed:', e);
+      console.error('⚠️ iOS AudioContext unlock failed:', e);
     }
   }
 
@@ -267,18 +278,12 @@ export class AudioPlayer {
         }
       });
     } else {
-      // iOS fallback: clear audio queue
-      this.audioQueue.forEach(audio => {
-        audio.pause();
-        audio.src = '';
-      });
-      this.audioQueue = [];
-      this.allChunks = [];
-      // Clear any pending auto-play timer
-      if (this.iosAutoPlayTimer) {
-        clearTimeout(this.iosAutoPlayTimer);
-        this.iosAutoPlayTimer = null;
+      // iOS Web Audio API: clear chunk queue and stop current source
+      if (this.iosCurrentSource) {
+        try { this.iosCurrentSource.stop(); } catch (e) { /* ignore */ }
+        this.iosCurrentSource = null;
       }
+      this.allChunks = [];
     }
   }
 
@@ -310,36 +315,35 @@ export class AudioPlayer {
         }
       }
     } else {
-      // iOS fallback: collect chunks
+      // iOS Web Audio API: collect chunks
       this.allChunks.push(base64Audio);
       
       // Start playback early after buffering ~1 second of audio (first 3 chunks)
-      // This is a compromise - not true streaming but faster than waiting for all
       const EARLY_PLAY_CHUNKS = 3;
       if (this.allChunks.length === EARLY_PLAY_CHUNKS && !this.isPlaying) {
         console.log(`🎧 iOS: Early play after ${EARLY_PLAY_CHUNKS} chunks`);
-        // Mark playing to prevent finalize from playing again
         this.isPlaying = true;
-        // Schedule playback with chunks collected so far
         this.scheduleIOSPlayback();
       }
     }
   }
 
   private iosPlaybackScheduled = false;
-  private iosCurrentAudio: HTMLAudioElement | null = null;
   
   private scheduleIOSPlayback(): void {
     if (this.iosPlaybackScheduled) return;
     this.iosPlaybackScheduled = true;
-    
-    // Play what we have now, and when it ends, play any new chunks
     this.playNextIOSBatch();
   }
   
   private async playNextIOSBatch(): Promise<void> {
     if (this.allChunks.length === 0) {
-      console.log('🎧 iOS: No more chunks to play');
+      if (!this.isFinalized) {
+        // Wait a bit for more chunks to arrive
+        setTimeout(() => this.playNextIOSBatch(), 200);
+        return;
+      }
+      console.log('🎧 iOS: All playback complete');
       this.isPlaying = false;
       this.iosPlaybackScheduled = false;
       if (this.onComplete) {
@@ -348,23 +352,17 @@ export class AudioPlayer {
       return;
     }
     
-    // Take all current chunks and play them
+    // Take all current chunks and play them as one batch
     const chunksToPlay = [...this.allChunks];
-    this.allChunks = []; // Clear so new chunks go to next batch
+    this.allChunks = [];
     
     console.log(`🎧 iOS: Playing batch of ${chunksToPlay.length} chunks`);
-    await this.playIOSChunks(chunksToPlay);
+    await this.playIOSChunksWebAudio(chunksToPlay);
   }
 
   finalize(): void {
     this.isFinalized = true;
     console.log(`🎧 FINALIZE: useMediaSource=${this.useMediaSource}, chunks=${this.allChunks.length}, isPlaying=${this.isPlaying}`);
-    
-    // Clear auto-play timer if it was set
-    if (this.iosAutoPlayTimer) {
-      clearTimeout(this.iosAutoPlayTimer);
-      this.iosAutoPlayTimer = null;
-    }
     
     if (this.useMediaSource) {
       this.flushQueue();
@@ -379,28 +377,37 @@ export class AudioPlayer {
     }
   }
   
-  private async playIOSChunks(chunks: string[]): Promise<void> {
+  /**
+   * Play MP3 chunks using Web Audio API (decodeAudioData + AudioBufferSourceNode).
+   * This does NOT require a user gesture — only AudioContext.resume() does,
+   * and that was already called during the initial tap.
+   */
+  private async playIOSChunksWebAudio(chunks: string[]): Promise<void> {
     if (chunks.length === 0) {
-      // Check if more chunks arrived while we were playing
-      if (this.allChunks.length > 0) {
-        this.playNextIOSBatch();
-      } else if (!this.isFinalized) {
-        // Wait a bit for more chunks
-        setTimeout(() => this.playNextIOSBatch(), 300);
-      } else {
-        // All done
-        console.log('🎧 iOS: All playback complete');
-        this.isPlaying = false;
-        this.iosPlaybackScheduled = false;
-        if (this.onComplete) {
-          this.onComplete();
-        }
-      }
+      this.playNextIOSBatch();
       return;
     }
 
+    if (!this.iosAudioContext || this.iosAudioContext.state !== 'running') {
+      console.error('🎧 iOS: AudioContext not available or not running!', 
+        this.iosAudioContext?.state);
+      // Try to resume it
+      if (this.iosAudioContext && this.iosAudioContext.state === 'suspended') {
+        try {
+          await this.iosAudioContext.resume();
+          console.log('🎧 iOS: AudioContext resumed');
+        } catch (e) {
+          console.error('🎧 iOS: Failed to resume AudioContext:', e);
+          this.isPlaying = false;
+          this.iosPlaybackScheduled = false;
+          if (this.onComplete) this.onComplete();
+          return;
+        }
+      }
+    }
+
     try {
-      // Decode chunks and combine
+      // Decode base64 chunks and combine into one ArrayBuffer
       const decodedChunks: Uint8Array[] = [];
       let totalLength = 0;
       
@@ -421,52 +428,34 @@ export class AudioPlayer {
         offset += chunk.length;
       }
       
-      console.log(`🎧 iOS: Playing ${chunks.length} chunks, ${totalLength} bytes`);
+      console.log(`🎧 iOS: Decoding ${chunks.length} chunks, ${totalLength} bytes via Web Audio API`);
       
-      const blob = new Blob([combinedBytes], { type: 'audio/mpeg' });
-      const url = URL.createObjectURL(blob);
+      // Decode MP3 → AudioBuffer (this is the magic — works without user gesture)
+      const audioBuffer = await this.iosAudioContext!.decodeAudioData(
+        combinedBytes.buffer.slice(0) // Must pass a copy, decodeAudioData detaches the buffer
+      );
       
-      // Reuse unlocked audio element if available, otherwise create new one
-      let audio: HTMLAudioElement;
-      if (this.iosUnlockedAudio && this.iosUnlockedAudio.paused) {
-        console.log('♻️ Reusing unlocked audio element');
-        audio = this.iosUnlockedAudio;
-        audio.src = url;
-      } else {
-        console.log('🆕 Creating new audio element');
-        audio = new Audio();
-        audio.preload = 'auto';
-        audio.setAttribute('playsinline', '');
-        audio.setAttribute('webkit-playsinline', '');
-        audio.src = url;
-      }
-      this.iosCurrentAudio = audio;
+      console.log(`🎧 iOS: Decoded to AudioBuffer: ${audioBuffer.duration.toFixed(2)}s, ${audioBuffer.sampleRate}Hz`);
       
-      // Use 'once' option to auto-remove listeners after firing
-      audio.addEventListener('ended', () => {
-        console.log('🎧 iOS: Batch ended');
-        URL.revokeObjectURL(url);
-        this.iosCurrentAudio = null;
-        // Play next batch if available
+      // Create a source node and play it
+      const source = this.iosAudioContext!.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(this.iosGainNode || this.iosAudioContext!.destination);
+      this.iosCurrentSource = source;
+      
+      // When this batch ends, play the next one
+      source.addEventListener('ended', () => {
+        this.iosCurrentSource = null;
         this.playNextIOSBatch();
-      }, { once: true });
+      });
       
-      audio.addEventListener('error', () => {
-        console.error('🎧 iOS: Audio error', audio.error);
-        URL.revokeObjectURL(url);
-        this.iosCurrentAudio = null;
-        // Try to continue with next batch
-        this.playNextIOSBatch();
-      }, { once: true });
+      source.start(0);
+      console.log('🎧 iOS: ▶️ Playing via Web Audio API');
       
-      await audio.play();
-      // Don't add reused audio to queue again
-      if (audio !== this.iosUnlockedAudio) {
-        this.audioQueue.push(audio);
-      }
     } catch (e: any) {
-      console.error('🎧 iOS: Failed to play batch:', e.message);
-      // Try next batch
+      console.error('🎧 iOS: Web Audio playback failed:', e.message);
+      // Try next batch despite error
+      this.iosCurrentSource = null;
       this.playNextIOSBatch();
     }
   }
@@ -493,26 +482,15 @@ export class AudioPlayer {
     if (this.useMediaSource) {
       this.resetStream();
     } else {
-      // iOS: stop all audio elements
-      if (this.iosCurrentAudio) {
-        this.iosCurrentAudio.pause();
-        // Reset unlocked audio if it's the one playing
-        if (this.iosCurrentAudio === this.iosUnlockedAudio && this.iosUnlockedAudio) {
-          this.iosUnlockedAudio.currentTime = 0;
-        }
-        this.iosCurrentAudio = null;
+      // iOS Web Audio: stop current source and clear queue
+      if (this.iosCurrentSource) {
+        try { this.iosCurrentSource.stop(); } catch (e) { /* ignore */ }
+        this.iosCurrentSource = null;
       }
-      this.audioQueue.forEach(audio => {
-        // Don't destroy the unlocked audio element
-        if (audio !== this.iosUnlockedAudio) {
-          audio.pause();
-          audio.currentTime = 0;
-        }
-      });
-      this.audioQueue = [];
       this.allChunks = [];
       this.isPlaying = false;
       this.iosPlaybackScheduled = false;
+      // Note: Do NOT close iosAudioContext — it stays unlocked for reuse
     }
   }
 

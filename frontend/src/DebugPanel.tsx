@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 
 // Frontend version for deployment tracking
-const VERSION = 'v1.0.2-ios-audio-fix';
+const VERSION = 'v1.0.3-web-audio-api';
 
 interface DebugInfo {
   userAgent: string;

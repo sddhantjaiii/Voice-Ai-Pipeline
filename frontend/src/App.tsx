@@ -4,7 +4,7 @@ import { AudioRecorder, AudioPlayer, float32ToInt16Base64 } from './audioUtils';
 import DebugPanel from './DebugPanel';
 
 // Frontend version for deployment tracking
-const VERSION = 'v1.0.2-ios-audio-fix';
+const VERSION = 'v1.0.3-web-audio-api';
 
 function App() {
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('disconnected');
@@ -31,37 +31,22 @@ function App() {
   const wsUrl = import.meta.env.VITE_WEBSOCKET_URL || 'ws://localhost:8000/ws/voice';
 
   // Unlock audio on iOS with user interaction
-  // iOS Safari requires AudioContext.resume() to be called from a user gesture
+  // iOS Safari requires AudioContext.resume() from a user gesture.
+  // AudioPlayer.unlockIOSAudio() creates & resumes an AudioContext that stays
+  // unlocked forever — all subsequent AudioBufferSourceNode.start() calls work.
   const unlockAudio = async () => {
     if (audioUnlocked) return;
     
     try {
-      // Create and resume an AudioContext (required for Web Audio API)
-      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-      if (audioCtx.state === 'suspended') {
-        await audioCtx.resume();
-      }
-      
-      // Play a tiny silent buffer to fully unlock
-      const buffer = audioCtx.createBuffer(1, 1, 22050);
-      const source = audioCtx.createBufferSource();
-      source.buffer = buffer;
-      source.connect(audioCtx.destination);
-      source.start(0);
-      
-      // Close the temporary context to free resources
-      audioCtx.close();
-      
-      // Tell AudioPlayer to unlock HTMLAudioElement playback
+      // AudioPlayer handles the AudioContext creation and unlock
       if (playerRef.current) {
-        await (playerRef.current as any).unlockIOSAudio();
+        await playerRef.current.unlockIOSAudio();
       }
       
       console.log('✅ iOS Audio unlocked successfully');
       setAudioUnlocked(true);
     } catch (e) {
       console.warn('⚠️ Audio unlock failed:', e);
-      // Still mark as unlocked to prevent repeated attempts
       setAudioUnlocked(true);
     }
   };
@@ -209,8 +194,8 @@ function App() {
   };
 
   const handleStartRecording = async () => {
-    // Unlock audio on iOS first
-    unlockAudio();
+    // Unlock audio on iOS first — MUST await so it happens within gesture context
+    await unlockAudio();
     
     if (!wsRef.current || connectionStatus !== 'connected') {
       setError('Not connected to server');
