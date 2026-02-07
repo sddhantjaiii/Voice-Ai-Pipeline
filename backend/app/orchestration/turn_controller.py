@@ -274,14 +274,47 @@ class TurnController:
         """
         current_state = self.state_machine.current_state
 
+        # Handle continued speech during COMMITTED state (before agent starts speaking)
+        if current_state == TurnState.COMMITTED:
+            # User is still speaking after silence debounce → cancel TTS and capture new speech
+            logger.info(f"User still speaking during COMMITTED: '{text[:50]}' - cancelling TTS")
+            # Cancel TTS task if running
+            if self._tts_task and not self._tts_task.done():
+                self._tts_cancel_event.set()
+                self._tts_task.cancel()
+                try:
+                    await self._tts_task
+                except asyncio.CancelledError:
+                    pass
+            # Clear sentence queue
+            while not self._sentence_queue.empty():
+                try:
+                    self._sentence_queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+            
+            # Transition to IDLE (valid transition), then to LISTENING
+            await self.state_machine.transition(
+                TurnState.IDLE,
+                reason="User still speaking - cancelling turn"
+            )
+            await self._notify_state_change(TurnState.COMMITTED, TurnState.IDLE)
+            
+            # Unlock transcript buffer so new speech can be captured
+            self.transcript_buffer.unlock()
+            
+            # Start new turn immediately
+            await self._transition_to_listening()
+            return
+
         # Handle interruption during SPEAKING state
         if current_state == TurnState.SPEAKING:
             # User is speaking during agent playback → barge-in interruption
-            logger.info(f"Final transcript during SPEAKING - triggering interruption: '{text[:50]}'")
+            logger.info(f"User barge-in detected during SPEAKING: '{text[:50]}' - interrupting agent")
             await self._handle_interrupt()
             return
 
-        # Ignore transcripts in other non-LISTENING states
+        # Only accept transcripts in LISTENING state for LLM input
         if current_state != TurnState.LISTENING:
             logger.warning(f"Received final transcript in {current_state} state - ignoring")
             return
